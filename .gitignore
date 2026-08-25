@@ -3,6 +3,7 @@
 
 # Local model / data downloads (HF snapshots, checkpoints)
 models/
+.models/
 checkpoints/
 data/
 outputs/

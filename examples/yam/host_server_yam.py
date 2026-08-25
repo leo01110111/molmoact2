@@ -128,7 +128,9 @@ class Policy:
         self.default_cuda_graph = enable_cuda_graph
         # `predict_action` reads `norm_stats.json` from `config._name_or_path`.
         # Always resolve to the local snapshot dir so that lookup works.
-        local_dir = snapshot_download(repo_id=repo_id)
+        # Accept a local snapshot for offline/reproducible evaluation as well
+        # as the normal Hugging Face repo id.
+        local_dir = repo_id if os.path.isdir(repo_id) else snapshot_download(repo_id=repo_id)
         log.info("Resolved snapshot dir: %s", local_dir)
 
         _patch_modeling_for_bf16(local_dir)

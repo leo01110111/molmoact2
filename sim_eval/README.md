@@ -64,6 +64,29 @@ uv run python -m sim_eval.run_eval \
 Results are written to `sim_eval/outputs/<timestamp>/results.json`.
 Videos and per-episode camera frames are saved alongside.
 
+### Interactive live evaluation
+
+Start the local YAM policy server (the server can load the downloaded checkpoint
+directly), then start the interactive simulator:
+
+```bash
+uv run python examples/yam/host_server_yam.py \
+  --host 127.0.0.1 --port 8202 \
+  --repo-id .models/MolmoAct2-BimanualYAM \
+  --device cuda:0 --dtype bfloat16
+
+uv run python -m sim_eval.live_eval \
+  --policy-type remote-yam \
+  --remote-url http://127.0.0.1:8202/act \
+  --env-id BimanualYAMPutEverythingInBox-v1
+```
+
+The terminal accepts a new language instruction at any time. `:reset` starts a
+new seeded episode, `:save <path>` writes a recorded rollout when
+`--record-video` is enabled, and `:quit` exits. Each control tick prints the
+instruction, action, simulator joint state, object count in the box, success
+flag, and policy latency.
+
 ### Key flags
 
 | Flag | Default | Description |

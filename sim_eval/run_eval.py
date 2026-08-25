@@ -74,6 +74,12 @@ class EvalConfig:
     control_freq: int = 30
     sim_freq: int = 150
 
+    sim_backend: str = "physx_cpu"
+    """ManiSkill physics backend (physx_cpu is portable and deterministic for one env)."""
+
+    render_backend: str = "cpu"
+    """SAPIEN render backend. Use 'gpu' only with a compatible torch/SAPIEN stack."""
+
     shader_pack: str = "rt-fast"
     """SAPIEN shader for sensor cameras (policy input)."""
 
@@ -152,9 +158,10 @@ def _run_episode(
     frames: list[np.ndarray] = []
     input_frames = _extract_input_frames(obs)
 
-    frame = _capture_frame(env)
-    if frame is not None:
-        frames.append(frame)
+    if config_save_video := getattr(env.unwrapped, "_molmoact_save_video", True):
+        frame = _capture_frame(env)
+        if frame is not None:
+            frames.append(frame)
 
     step = 0
     for step in range(max_steps):
@@ -174,9 +181,10 @@ def _run_episode(
         terminated = bool(terminated.any()) if isinstance(terminated, torch.Tensor) else bool(terminated)
         truncated  = bool(truncated.any())  if isinstance(truncated,  torch.Tensor) else bool(truncated)
 
-        frame = _capture_frame(env)
-        if frame is not None:
-            frames.append(frame)
+        if config_save_video:
+            frame = _capture_frame(env)
+            if frame is not None:
+                frames.append(frame)
 
         if terminated or truncated:
             break
@@ -204,7 +212,10 @@ def _evaluate_task(env_id: str, client: MolmoActClientBase, config: EvalConfig) 
         reward_mode="none",
         sensor_configs=dict(shader_pack=config.shader_pack),
         sim_config=dict(sim_freq=config.sim_freq, control_freq=config.control_freq),
+        sim_backend=config.sim_backend,
+        render_backend=config.render_backend,
     )
+    env.unwrapped._molmoact_save_video = config.save_video
 
     out_dir = Path(config.output_dir)
     episodes, successes, rewards, steps_list = [], [], [], []
