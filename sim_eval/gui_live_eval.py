@@ -19,6 +19,11 @@ from .tasks import *  # noqa: F401,F403
 from .inference.client import DroidClient, YAMClient
 from .run_eval import DEFAULT_LANGUAGE_INSTRUCTIONS
 
+TASKS = [
+    "BimanualYAMPutEverythingInBox-v1",
+    "DroidPutEverythingInBox-v1",
+]
+
 
 class LiveGui:
     def __init__(self, args: argparse.Namespace):
@@ -28,6 +33,8 @@ class LiveGui:
         self.stop_event = threading.Event()
         self.reset_event = threading.Event()
         self.instruction = args.instruction or DEFAULT_LANGUAGE_INSTRUCTIONS.get(args.env_id, "perform the task")
+        self.episode_limit = args.max_steps
+        self.current_env_id = args.env_id
         self.env = None
         self.client = None
 
@@ -62,12 +69,21 @@ class LiveGui:
 
         side = ttk.Frame(self.root, padding=(7, 0, 14, 14))
         side.grid(row=1, column=1, sticky="nsew")
-        side.rowconfigure(3, weight=1)
+        side.rowconfigure(6, weight=1)
         side.columnconfigure(0, weight=1)
 
-        ttk.Label(side, text="Instruction").grid(row=0, column=0, sticky="w")
+        ttk.Label(side, text="Task").grid(row=0, column=0, sticky="w")
+        task_row = ttk.Frame(side)
+        task_row.grid(row=1, column=0, sticky="ew", pady=(4, 10))
+        task_row.columnconfigure(0, weight=1)
+        self.task_combo = ttk.Combobox(task_row, values=TASKS, state="readonly")
+        self.task_combo.set(self.current_env_id)
+        self.task_combo.grid(row=0, column=0, sticky="ew")
+        ttk.Button(task_row, text="Apply task", command=self.apply_task).grid(row=0, column=1, padx=(6, 0))
+
+        ttk.Label(side, text="Instruction").grid(row=2, column=0, sticky="w")
         entry_row = ttk.Frame(side)
-        entry_row.grid(row=1, column=0, sticky="ew", pady=(4, 10))
+        entry_row.grid(row=3, column=0, sticky="ew", pady=(4, 10))
         entry_row.columnconfigure(0, weight=1)
         self.entry = ttk.Entry(entry_row)
         self.entry.insert(0, self.instruction)
@@ -75,19 +91,40 @@ class LiveGui:
         self.entry.bind("<Return>", lambda _event: self.send_instruction())
         ttk.Button(entry_row, text="Send", command=self.send_instruction).grid(row=0, column=1, padx=(6, 0))
 
+        limit_row = ttk.Frame(side)
+        limit_row.grid(row=4, column=0, sticky="ew", pady=(0, 8))
+        ttk.Label(limit_row, text="Episode limit").pack(side="left")
+        self.limit_spin = ttk.Spinbox(limit_row, from_=1, to=100000, width=8)
+        self.limit_spin.set(str(self.episode_limit))
+        self.limit_spin.pack(side="left", padx=(8, 4))
+        ttk.Button(limit_row, text="Apply", command=self.apply_limit).pack(side="left")
+
         buttons = ttk.Frame(side)
-        buttons.grid(row=2, column=0, sticky="ew", pady=(0, 10))
+        buttons.grid(row=5, column=0, sticky="ew", pady=(0, 10))
         ttk.Button(buttons, text="Reset episode", command=lambda: self.commands.put(("reset", None))).pack(side="left")
         ttk.Button(buttons, text="Stop", command=self.close).pack(side="right")
 
         self.log = tk.Text(side, height=12, width=42, state="disabled", wrap="word")
-        self.log.grid(row=3, column=0, sticky="nsew")
+        self.log.grid(row=6, column=0, sticky="nsew")
         self.log.configure(font=("TkFixedFont", 9))
 
     def send_instruction(self) -> None:
         text = self.entry.get().strip()
         if text:
             self.commands.put(("instruction", text))
+
+    def apply_limit(self) -> None:
+        try:
+            limit = max(1, int(self.limit_spin.get()))
+        except ValueError:
+            self.status.configure(text="Episode limit must be an integer")
+            return
+        self.commands.put(("limit", str(limit)))
+
+    def apply_task(self) -> None:
+        task = self.task_combo.get().strip()
+        if task in TASKS:
+            self.commands.put(("task", task))
 
     @staticmethod
     def _frame_from_obs(obs: dict) -> np.ndarray | None:
@@ -108,19 +145,26 @@ class LiveGui:
         return image
 
     def _run_simulation(self) -> None:
-        client_cls = DroidClient if self.args.policy_type == "remote-droid" else YAMClient
-        self.client = client_cls(self.args.remote_url, n_action_steps=self.args.n_action_steps, request_timeout=120)
-        self.env = gym.make(
-            self.args.env_id, obs_mode="rgb", control_mode="pd_joint_pos", render_mode="rgb_array",
-            max_episode_steps=self.args.max_steps, reward_mode="none",
+        def create_env(env_id: str):
+            return gym.make(
+            env_id, obs_mode="rgb", control_mode="pd_joint_pos", render_mode="rgb_array",
+            max_episode_steps=max(self.args.max_steps, 100000), reward_mode="none",
             sensor_configs=dict(shader_pack="minimal"),
             sim_config=dict(sim_freq=150, control_freq=self.args.control_freq),
             sim_backend="physx_cpu", render_backend="cpu",
-        )
+            )
+
+        def create_client(env_id: str):
+            client_cls = DroidClient if env_id.startswith("Droid") else YAMClient
+            endpoint = self.args.droid_url if env_id.startswith("Droid") else self.args.yam_url
+            return client_cls(endpoint or self.args.remote_url, n_action_steps=self.args.n_action_steps, request_timeout=120)
+
+        self.client = create_client(self.current_env_id)
+        self.env = create_env(self.current_env_id)
         obs, _ = self.env.reset(seed=42)
         step = 0
         self.updates.put(("status", "Running"))
-        while not self.stop_event.is_set() and step < self.args.max_steps:
+        while not self.stop_event.is_set() and step < self.episode_limit:
             while True:
                 try:
                     command, value = self.commands.get_nowait()
@@ -135,6 +179,20 @@ class LiveGui:
                     self.client.reset()
                     step = 0
                     self.updates.put(("log", "episode reset"))
+                elif command == "limit" and value:
+                    self.episode_limit = max(1, int(value))
+                    self.updates.put(("log", f"episode limit: {self.episode_limit} steps"))
+                elif command == "task" and value in TASKS:
+                    self.env.close()
+                    self.current_env_id = value
+                    self.client = create_client(value)
+                    self.env = create_env(value)
+                    obs, _ = self.env.reset(seed=42 + step + 1)
+                    self.client.reset()
+                    step = 0
+                    self.instruction = DEFAULT_LANGUAGE_INSTRUCTIONS.get(value, "perform the task")
+                    self.updates.put(("instruction", self.instruction))
+                    self.updates.put(("log", f"task: {value}"))
 
             started = time.monotonic()
             action = self.client.infer(obs, self.instruction)
@@ -158,6 +216,9 @@ class LiveGui:
                 kind, value = self.updates.get_nowait()
                 if kind == "status":
                     self.status.configure(text=str(value))
+                elif kind == "instruction":
+                    self.entry.delete(0, "end")
+                    self.entry.insert(0, str(value))
                 elif kind == "log":
                     self.log.configure(state="normal")
                     self.log.insert("end", str(value) + "\n")
@@ -188,6 +249,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--policy-type", choices=["remote-droid", "remote-yam"], default="remote-yam")
     parser.add_argument("--remote-url", required=True)
+    parser.add_argument("--droid-url", default=None, help="Optional DROID /act endpoint when switching tasks")
+    parser.add_argument("--yam-url", default=None, help="Optional YAM /act endpoint when switching tasks")
     parser.add_argument("--env-id", default="BimanualYAMPutEverythingInBox-v1")
     parser.add_argument("--instruction", default=None)
     parser.add_argument("--n-action-steps", type=int, default=10)
