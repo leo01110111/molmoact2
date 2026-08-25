@@ -87,6 +87,16 @@ new seeded episode, `:save <path>` writes a recorded rollout when
 instruction, action, simulator joint state, object count in the box, success
 flag, and policy latency.
 
+For a desktop interface with a live simulator camera, text entry, reset, stop,
+and status log, use the Tk GUI:
+
+```bash
+DISPLAY=:1 MUJOCO_GL=egl uv run python -m sim_eval.gui_live_eval \
+  --policy-type remote-yam \
+  --remote-url http://127.0.0.1:8202/act \
+  --env-id BimanualYAMPutEverythingInBox-v1
+```
+
 ### Key flags
 
 | Flag | Default | Description |
